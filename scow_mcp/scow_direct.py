@@ -29,7 +29,7 @@ try:
 except Exception:
     cairosvg = None
 
-BASE_URL = os.environ.get("SCOW_BASE_URL", "https://scow.example.edu").rstrip("/")
+BASE_URL = os.environ.get("SCOW_BASE_URL", "https://scow.buu.edu.cn").rstrip("/")
 CLUSTER = os.environ.get("SCOW_CLUSTER", "example-cluster")
 LOGIN_NODE = os.environ.get("SCOW_LOGIN_NODE", "login-node.example.edu")
 SESSION_DIR = Path(os.environ.get("SCOW_SESSION_DIR", Path.home() / ".scow-mcp"))
