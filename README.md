@@ -77,3 +77,15 @@ PYTHONPATH=scow_mcp python scow_mcp/server.py
 ## 许可证
 
 本项目使用 MIT License。
+
+## File upload protocol
+
+`scow_upload` follows the same protocol used by OpenSCOW’s file manager:
+
+1. `POST /api/file/initMultipartUpload` with `{cluster, path, name}`.
+2. Split the local file using the returned `chunkSizeByte`.
+3. For each chunk, calculate SHA-256 and `POST multipart/form-data` field `file` to `/api/file/upload?cluster=...&path=<tempFileDir>/<sha256>_<index>.scowuploadtemp`.
+4. Resume chunks already listed in `filesInfo`.
+5. `POST /api/file/mergeFileChunks` with `{cluster, path, name, sizeByte}`.
+
+The upload uses the authenticated Python HTTP session, never prints cookies or passwords, and does not use WebShell/base64 transfer.
