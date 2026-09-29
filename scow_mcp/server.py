@@ -7,6 +7,7 @@ straight to the authenticated WSS WebShell endpoint.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import mimetypes
 import os
@@ -55,6 +56,54 @@ def captcha_result(captcha_path: Path):
     return {"content": content}
 
 
+
+def upload_file(local_path: str, remote_dir: str, cluster: str = CLUSTER) -> dict:
+    """Upload a local file using SCOW's multipart file-manager HTTP API."""
+    source = Path(local_path).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"local file not found: {source}")
+    remote_dir = remote_dir or "."
+    name = source.name
+    session = AUTH
+    if not session.validate():
+        session = ScowAuth.load_saved()
+    base = BASE_URL
+    init = session.session.post(
+        f"{base}/api/file/initMultipartUpload",
+        json={"cluster": cluster, "path": remote_dir, "name": name},
+        timeout=30,
+    )
+    init.raise_for_status()
+    data = init.json()
+    temp_dir = data["tempFileDir"]
+    chunk_size = int(data["chunkSizeByte"])
+    size = source.stat().st_size
+    uploaded = {int(item["name"].rsplit("_", 1)[-1].split(".", 1)[0])
+                for item in data.get("filesInfo", [])
+                if "_" in item.get("name", "") and item.get("name", "").endswith(".scowuploadtemp")}
+    count = (size + chunk_size - 1) // chunk_size
+    with source.open("rb") as handle:
+        for index in range(1, count + 1):
+            chunk = handle.read(chunk_size)
+            if index in uploaded:
+                continue
+            digest = hashlib.sha256(chunk).hexdigest()
+            temp_name = f"{digest}_{index}.scowuploadtemp"
+            response = session.session.post(
+                f"{base}/api/file/upload",
+                params={"cluster": cluster, "path": f"{temp_dir.rstrip('/')}/{temp_name}"},
+                files={"file": (temp_name, chunk)},
+                timeout=300,
+            )
+            response.raise_for_status()
+    merged = session.session.post(
+        f"{base}/api/file/mergeFileChunks",
+        json={"cluster": cluster, "path": remote_dir, "name": name, "sizeByte": size},
+        timeout=300,
+    )
+    merged.raise_for_status()
+    return {"status": "uploaded", "name": name, "remote_path": f"{remote_dir.rstrip('/')}/{name}", "size": size, "chunks": count, "chunk_size": chunk_size}
+
 def get_shell() -> ScowShell:
     global SHELL
     with LOCK:
@@ -84,6 +133,16 @@ def call_tool(name, args):
             SHELL = None
         # Do not echo the password or cookies.
         return text_result(json.dumps({"status": "logged_in", "cookie_file": result["cookie_file"]}, ensure_ascii=False, indent=2))
+
+    if name == "scow_upload":
+        local_path = str(args.get("local_path", "")).strip()
+        remote_dir = str(args.get("remote_dir", "~/models")).strip()
+        cluster = str(args.get("cluster", CLUSTER)).strip() or CLUSTER
+        if not local_path:
+            return text_result("local_path is required", True)
+        with LOCK:
+            result = upload_file(local_path, remote_dir, cluster)
+        return text_result(json.dumps(result, ensure_ascii=False, indent=2))
 
     if name == "scow_status":
         with LOCK:
@@ -140,6 +199,7 @@ def call_tool(name, args):
 TOOLS = [
     {"name": "scow_login_start", "description": "Start SCOW login and return the generated captcha as inline MCP image content. Inspect the attached image directly, then call scow_login; do not use a terminal login helper or default SVG viewer.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "scow_login", "description": "Complete browserless SCOW login. The password is used only in memory and is never echoed.", "inputSchema": {"type": "object", "properties": {"username": {"type": "string"}, "password": {"type": "string"}, "captcha": {"type": "string"}}, "required": ["username", "password", "captcha"], "additionalProperties": False}},
+    {"name": "scow_upload", "description": "Upload a local file to SCOW using the authenticated multipart file-manager API. Resumes completed chunks and merges them when done.", "inputSchema": {"type": "object", "properties": {"local_path": {"type": "string"}, "remote_dir": {"type": "string", "default": "~/models"}, "cluster": {"type": "string", "default": CLUSTER}}, "required": ["local_path"], "additionalProperties": False}},
     {"name": "scow_status", "description": "Show direct Python SCOW HTTP/WSS client status.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "scow_exec", "description": "Run a non-interactive shell command in the SCOW WebShell.", "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"], "additionalProperties": False}},
     {"name": "scow_send", "description": "Send raw terminal input to SCOW, useful for interactive programs and control bytes.", "inputSchema": {"type": "object", "properties": {"data": {"type": "string"}}, "required": ["data"], "additionalProperties": False}},
