@@ -6,7 +6,9 @@ straight to the authenticated WSS WebShell endpoint.
 """
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
 import re
 import sys
@@ -32,6 +34,27 @@ def text_result(text: str, error: bool = False):
     return result
 
 
+def captcha_result(captcha_path: Path):
+    """Return the captcha as MCP image content for direct client inspection."""
+    content = []
+    if captcha_path.exists():
+        mime_type = mimetypes.guess_type(captcha_path.name)[0] or "image/png"
+        content.append({
+            "type": "image",
+            "data": base64.b64encode(captcha_path.read_bytes()).decode("ascii"),
+            "mimeType": mime_type,
+        })
+    content.append({
+        "type": "text",
+        "text": json.dumps({
+            "captcha_image": str(captcha_path),
+            "captcha_svg": str(captcha_path.with_suffix(".svg")),
+            "message": "The captcha image is attached above. Inspect it directly, then call scow_login with username, password, and the captcha text. Do not use a terminal login helper or a default SVG viewer.",
+        }, ensure_ascii=False, indent=2),
+    })
+    return {"content": content}
+
+
 def get_shell() -> ScowShell:
     global SHELL
     with LOCK:
@@ -48,11 +71,7 @@ def call_tool(name, args):
         with LOCK:
             AUTH = ScowAuth()
             captcha = AUTH.begin_login()
-        return text_result(json.dumps({
-            "captcha_image": str(captcha),
-            "captcha_svg": str(Path(captcha).with_suffix(".svg")),
-            "message": "Open the captcha image, then call scow_login with username, password, and the captcha text.",
-        }, ensure_ascii=False, indent=2))
+        return captcha_result(Path(captcha))
 
     if name == "scow_login":
         username = str(args.get("username", "")).strip()
@@ -119,7 +138,7 @@ def call_tool(name, args):
 
 
 TOOLS = [
-    {"name": "scow_login_start", "description": "Start browserless SCOW HTTP login and save the captcha image locally.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "scow_login_start", "description": "Start SCOW login and return the generated captcha as inline MCP image content. Inspect the attached image directly, then call scow_login; do not use a terminal login helper or default SVG viewer.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "scow_login", "description": "Complete browserless SCOW login. The password is used only in memory and is never echoed.", "inputSchema": {"type": "object", "properties": {"username": {"type": "string"}, "password": {"type": "string"}, "captcha": {"type": "string"}}, "required": ["username", "password", "captcha"], "additionalProperties": False}},
     {"name": "scow_status", "description": "Show direct Python SCOW HTTP/WSS client status.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "scow_exec", "description": "Run a non-interactive shell command in the SCOW WebShell.", "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"], "additionalProperties": False}},
